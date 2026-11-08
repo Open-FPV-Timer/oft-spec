@@ -491,9 +491,16 @@ oft/
 7. Should OFT live in its own repo, separate from Grid?
 8. Will other Race Managers (RotorHazard plugin, FPVTrackside, LiveTime) adopt it? If so,
    keep L1 tiny.
-9. Does a Timer need race start/stop, or does it always emit and let the Race Manager
-   filter? Leaning: always emit.
+9. ~~Does a Timer need race start/stop?~~ **Decided 2026-11-08: no.** A Timer always emits
+   crossings; the Race Manager records race-go as its own fact on the Timer clock and filters.
+   (Grid's portable-race-day review reached the same answer.)
 10. Verify LapRF `rtcTime` units and the C5 BOOT strap pin before relying on either.
 11. B5 carrier: which hub IC(s), which C5 module, on-board splitter or one connector per
     module, and total power for 8 C5s plus a Pi (802.3af vs 802.3at)?
 12. B5 HAT: right-angle USB jumper vs Zero 2 pogo pins vs the RP2350-over-UART option.
+13. **Per-seat thresholds (v0.4).** v0.3 has one `threshold` per Timer; RotorHazard and Grid tune
+    per seat. Planned: `config.seats[].threshold` (same shape) overriding the Timer default; the
+    rh-oft plugin currently forwards seat 0's levels only.
+14. Clients must read advertised capability values (e.g. `samples.history.full_rate_s`) rather
+    than assume the numbers in this document's examples; `oftd` keeps 600 s, the RP2350 host a
+    30 s reduced trace.
