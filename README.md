@@ -13,7 +13,7 @@ Notes from 2026-11-08 on building better and cheaper FPV timer hardware for Grid
 - [hbom-b1-single-pilot.md](hbom-b1-single-pilot.md): parts bought and still needed for the
   first single-pilot gate timer (B1), plus wiring.
 
-**Code:** the sibling `oft` repo (Rust workspace) and `rh-oft` (RotorHazard plugin).
+**Code:** sibling repos `oft` (Rust workspace: core, sim, oftd), `oft-timer-rp2350` (B1 Timer firmware), `oft-node-c5` (C5 Node firmware, widscan58 fork) and `rh-oft` (RotorHazard plugin).
 
 **Current lean:** ESP32-C5 receivers, wired Ethernet with PoE. Reference firmware on the GPL
 esp-sdr / widscan58 base, which can be combined with Grid's AGPL. The node detects and
