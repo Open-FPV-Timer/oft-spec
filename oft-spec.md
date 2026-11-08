@@ -13,6 +13,9 @@
 - Message type key is `type` (was `t`). Live signal is `samples`, passes are `crossing`.
 - Added `fw.update`: the Timer finds and flashes its Nodes over USB or UART.
 - Added **RF silence** rule: no Wi-Fi or other transmitting at the gate.
+- **Pilots per Node** is spelled out in §4.1 with a `seats_per_node` config knob.
+- Reference code exists: the `oft` repo (Rust workspace: `oft-nodelink`, `oft-core`,
+  `oft-sim`, `oftd`) implements §5, §8 and §6 and is tested against synthetic passes.
 - B3 (Raspberry Pi Timer) now covers 8 Nodes: USB for data, shared SYNC wire for time.
 - Added **B5: carrier board** (8 C5s, one USB link) with a **Pi HAT variant** (§9.2), and
   RotorHazard / NuclearHazard multi-node hardware as prior art.
@@ -152,6 +155,22 @@ needs one link per C5 (or a hub that aggregates them) plus clock mapping (§4.2)
 - With one shared gate antenna and a splitter, any Node can take any seat, so physical port
   order does not matter. Nodes are identified by chip id from their `Hello`.
 
+**Pilots per Node (multi-pilot on one C5).** A single Node can watch several seats by
+hopping, the way FPVGateC5MK does. This is a first-class feature, not a fallback:
+
+- A Node's `Hello` reports `max_seats` (the C5 reference: 8). The `Plan` message carries up
+  to 8 `{seat, freq}` pairs per Node.
+- `/config` has `seats_per_node` (default: the Node's `max_seats`). The scheduler never puts
+  more seats on a Node than that. For a single-Node Timer, the number of **enabled seats**
+  is therefore the number of pilots on that Node.
+- The cost is sample rate and settling: a Node sampling at 1 kHz split 4 ways gives each
+  seat 250 Hz, and every hop costs a settling window flagged `post_hop`. Timing accuracy
+  degrades roughly with the number of seats. Guidance: **1 seat for the best timing, up to
+  4 for racing, up to 8 for practice or open flying.** `/info` reports each seat's actual
+  `rate_hz` so clients can show this.
+- The B1 single-pilot timer is the one-seat case of the same firmware; nothing changes in
+  the protocol when a second pilot is added.
+
 ### 4.2 Clocks
 
 - `oft-core` owns the **timer clock**: µs since the Timer booted, unsigned 64-bit.
@@ -253,7 +272,7 @@ Adapters only need L1. All reference builds aim for L3.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, range_mhz, link}]`), seats (`[{seat, node, rate_hz}]`), `calibrated` |
-| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled}]`), attenuation, threshold mode and values, `min_lap_ms`, network settings |
+| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled}]`), `seats_per_node`, attenuation, threshold mode and values, `min_lap_ms`, network settings |
 | GET | `/status` | uptime, temperature, link, per-Node state, clock-fit quality (residual µs), dropped samples, clients |
 | GET | `/time` | timer clock now, in µs |
 | GET | `/crossings?since=<seq>` | crossings after `seq`, for catching up after a reconnect |
@@ -343,7 +362,14 @@ Algorithm id: `edge_mid`.
   in dB between the noise floor and the peak. This is robust to the dip in the middle of the
   pulse caused by the quad antenna's axial null (RotorHazard's plateau midpoint is not).
 - `min_lap_ms` suppresses a second crossing within that window.
-- Optional `flags`: `clipped`, `low_snr`, `hop_artifact`.
+- Optional `flags`: `clipped`, `low_snr`, `hop_artifact`, `truncated`.
+- Implementation notes from `oft-core` (verified against synthetic passes, see the `oft`
+  repo): keep ~128 samples of pre-trigger history so the rising edge is found even when the
+  edge level is below the enter level; clamp the edge level to no lower than the exit level;
+  subtract the smoothing filter's group delay (2^shift − 1 samples for the EMA) from `t_mid`;
+  track the noise floor in fixed point, only while the signal is well below the enter level,
+  and faster downwards than upwards. With these, `t_mid` lands within ~2 ms of the true pulse
+  centre on clean, dipped and clipped synthetic passes at 1 kHz.
 
 ## 9. Reference builds
 
