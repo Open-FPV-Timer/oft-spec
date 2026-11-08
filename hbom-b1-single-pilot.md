@@ -74,21 +74,28 @@ the peak), any clipping, and RHCP vs LHCP difference.
 
 **Per-timer total: $38.28**, under the $50 target.
 
+## RP2350-POE-ETH pinout (from Waveshare's demo sources, `lib/Config/DEV_Config.h`)
+
+W6300 on **SPI0, single-SPI mode**, 70 MHz in their demo: SCK **GP18**, MOSI **GP19**, MISO **GP16**,
+CS **GP17**, RST **GP20**, INT **GP21**. Same pins as Embassy's W5500 RP235x example. VSYS ADC on
+GP29. These GPIOs are therefore **taken**: 16–21, 29 (plus the WS2812 and USB/PoE detect pins,
+see below once confirmed).
+
 ## Wiring (RP2350-POE-ETH ↔ XIAO ESP32-C5)
 
-Pin numbers TBD until the board's pinout is checked (avoid the W6300's pins).
+Proposed pins on the RP2350 side (free of the W6300); confirm against the header silkscreen.
 
 | Signal | RP2350 board | XIAO C5 | Notes |
 |---|---|---|---|
 | Power | 5 V / VSYS out | 5V | Power the C5 from 5 V, not the board's 3.3 V regulator (800 mA max) |
 | Ground | GND | GND | |
-| Node link TX → RX | UART TX (GPIO TBD) | UART RX (D7) | 921600 baud to start |
-| Node link RX ← TX | UART RX (GPIO TBD) | UART TX (D6) | |
-| SYNC | GPIO TBD (output) | any free GPIO (input) | Clock sync pulse, 10–100 Hz |
-| C5 reset (optional) | GPIO TBD | EN / RST pad | Only needed to flash the C5 from the RP2350. First test: flash over USB-C from the laptop |
-| C5 boot (optional) | GPIO TBD | BOOT strap pin | Same as above. Check C5 datasheet for the strap pin |
+| Node link TX → RX | UART1 TX **GP4** | UART RX (D7 = GPIO12) | 921600 baud 8N1 |
+| Node link RX ← TX | UART1 RX **GP5** | UART TX (D6 = GPIO11) | widscan58 already uses these XIAO pins for its host UART |
+| SYNC | **GP6** (output) | a free XIAO GPIO (input, TBD) | 20 Hz pulse; the Node latches edge times |
+| C5 reset | **GP7** | EN / RST pad | Lets the Timer reboot/flash the C5. First test: flash over USB-C from the laptop |
+| C5 boot | **GP8** | BOOT strap pin (GPIO28 on the C5 per Espressif's docs; confirm on the XIAO) | Same as above |
 
-XIAO D6/D7 as the default UART pins is from the XIAO family layout; confirm on the C5 pinout.
+XIAO D6/D7 = C5 GPIO11/12 is confirmed by widscan58 (`CLAUDE.md`: UART0 TX GPIO11, RX GPIO12).
 
 ## To check when the boards arrive
 
