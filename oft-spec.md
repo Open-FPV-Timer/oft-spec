@@ -1,6 +1,14 @@
-# Open FPV Timer (OFT) — draft spec v0.3
+# Open FPV Timer (OFT) — draft spec v0.4
 
 **Status:** idea draft, 2026-11-08. Nothing here is built or final.
+
+**Changes from v0.3:**
+
+- **Per-seat thresholds.** A seat in `/config` may carry its own `threshold`; the top-level
+  `threshold` is the default for seats without one (§6.3, §8). Timers that support this
+  announce `capabilities.config.seat_thresholds`. A v0.3 `PUT /config` body is still valid.
+- **Discovery** (§6.1) is spelled out: service type, instance name, TXT keys and their
+  values. `oftd` now advertises.
 
 **Changes from v0.2 (was "Open Timer Node", OTN):**
 
@@ -237,7 +245,15 @@ JSON is the mandatory encoding; other encodings may be offered in `encodings` la
 
 ### 6.1 Discovery
 
-- mDNS service `_oft._tcp`. TXT: `id`, `fw`, `proto=1`, `seats`, `nodes`, `level`.
+- A Timer advertises the DNS-SD service `_oft._tcp` over mDNS (`_oft._tcp.local.`), on the
+  port that serves the OFT Protocol.
+  - **Instance name:** the Timer `id`, e.g. `oft-3fa2._oft._tcp.local.`.
+  - **TXT keys:** `id` (same as `/info`), `fw` (Timer firmware version), `proto=1`, `seats`
+    (number of enabled seats), `nodes` (number of Nodes that have said hello), `level`
+    (`L1`–`L3`). Unknown keys MUST be ignored.
+  - The Timer re-announces when `seats` or `nodes` change, and sends a goodbye on a clean
+    shutdown. TXT is a hint for listing Timers; `/info` is the source of truth.
+  - `oftd` advertises by default; `--no-mdns` turns it off.
 - DHCP by default. A static IP can be set via `/config`.
 - Timers must support at least 2 simultaneous clients (4 recommended).
 
@@ -252,7 +268,7 @@ an `x-<vendor>-` prefix.
 | `crossings` | Timer detects crossings and emits `crossing` events; `/crossings?since=` works | `algorithms`, `replay` (crossings kept for catch-up), `fields` (optional crossing fields supported) |
 | `samples.stream` | Live signal over the WebSocket | `rate_hz` (max per seat), `decimate` (supported factors) |
 | `samples.history` | `/samples` returns past signal for a time window | `full_rate_s` (seconds kept at full rate), `reduced_rate_s`, `reduced_hz` |
-| `config` | `/config` accepts writes | `persist`, `threshold_modes` (`auto`, `manual`), `min_lap_ms` |
+| `config` | `/config` accepts writes | `persist`, `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seats_per_node`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
 | `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool) |
 | `direction` | Crossings include direction | reserved |
@@ -272,13 +288,37 @@ Adapters only need L1. All reference builds aim for L3.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, range_mhz, link}]`), seats (`[{seat, node, rate_hz}]`), `calibrated` |
-| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled}]`), `seats_per_node`, attenuation, threshold mode and values, `min_lap_ms`, network settings |
+| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), `seats_per_node`, attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, network settings |
 | GET | `/status` | uptime, temperature, link, per-Node state, clock-fit quality (residual µs), dropped samples, clients |
 | GET | `/time` | timer clock now, in µs |
 | GET | `/crossings?since=<seq>` | crossings after `seq`, for catching up after a reconnect |
 | GET | `/samples?seat=&from=&to=` | signal history, for re-deriving a missed lap |
 | POST | `/fw/nodes` | start a Node update (body: which Nodes, or `all`); progress in `/status` |
 | GET | `/stream` | WebSocket upgrade for live data |
+
+**`/config` thresholds.** The top-level `threshold` applies to every seat that does not
+carry its own. A seat's optional `threshold` has the same shape and overrides it for that
+seat only:
+
+```json
+{
+  "seats": [
+    { "seat": 0, "freq_mhz": 5658, "enabled": true },
+    { "seat": 1, "freq_mhz": 5732, "enabled": true,
+      "threshold": { "mode": "manual", "enter": -700, "exit": -760 } }
+  ],
+  "seats_per_node": 8,
+  "threshold": { "mode": "auto", "snr_enter": 150, "hysteresis": 50 },
+  "min_lap_ms": 2000
+}
+```
+
+- On `PUT`, a seat `threshold` that is absent or `null` means "use the top-level one". `PUT`
+  replaces the whole config, so a body without seat thresholds (any v0.3 client) clears them.
+- `GET` returns a seat's `threshold` only when that seat has its own.
+- `status.seats[].enter` / `exit` report the levels each seat is actually using.
+- Clients MUST NOT send seat thresholds unless the Timer announces
+  `capabilities.config.seat_thresholds`.
 
 ### 6.4 WebSocket stream
 
@@ -297,7 +337,7 @@ One JSON object per text frame. On connect the Timer sends `hello`:
     "crossings": { "algorithms": ["edge_mid"], "replay": 256, "fields": ["t_enter", "t_exit", "peak", "snr"] },
     "samples.stream": { "rate_hz": 1000, "decimate": [1, 2, 5, 10, 20] },
     "samples.history": { "full_rate_s": 3600, "reduced_rate_s": 0, "reduced_hz": 0 },
-    "config": { "persist": true, "threshold_modes": ["auto", "manual"], "min_lap_ms": true },
+    "config": { "persist": true, "threshold_modes": ["auto", "manual"], "min_lap_ms": true, "seat_thresholds": true },
     "time": { "sync": ["ping"], "err_us": 0 },
     "fw.update": { "nodes": ["usb"], "self": false }
   }
@@ -356,6 +396,8 @@ Algorithm id: `edge_mid`.
   - `auto`: enter at floor + `snr_enter` dB (default 15), exit at enter − `hysteresis` dB
     (default 5).
   - `manual`: absolute enter and exit levels (RotorHazard-style EnterAt/ExitAt).
+  - Each seat uses its own threshold if it has one, else the Timer-wide one (§6.3). Mode and
+    values are chosen per seat; `min_lap_ms` stays Timer-wide.
 - A **crossing** spans enter to exit. Timers MUST report `t_enter`, `t_exit` and `t_mid`.
 - **`t_mid` is the lap timestamp.** It is the midpoint of the times the smoothed trace
   crosses the **edge level** on the rise and on the fall. The edge level defaults to halfway
@@ -498,9 +540,8 @@ oft/
 11. B5 carrier: which hub IC(s), which C5 module, on-board splitter or one connector per
     module, and total power for 8 C5s plus a Pi (802.3af vs 802.3at)?
 12. B5 HAT: right-angle USB jumper vs Zero 2 pogo pins vs the RP2350-over-UART option.
-13. **Per-seat thresholds (v0.4).** v0.3 has one `threshold` per Timer; RotorHazard and Grid tune
-    per seat. Planned: `config.seats[].threshold` (same shape) overriding the Timer default; the
-    rh-oft plugin currently forwards seat 0's levels only.
+13. ~~Per-seat thresholds.~~ **Done in v0.4:** `config.seats[].threshold` overrides the Timer
+    default (§6.3). The rh-oft plugin still forwards seat 0's levels only.
 14. Clients must read advertised capability values (e.g. `samples.history.full_rate_s`) rather
     than assume the numbers in this document's examples; `oftd` keeps 600 s, the RP2350 host a
     30 s reduced trace.
