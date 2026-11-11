@@ -7,6 +7,12 @@
 - **Per-seat thresholds.** A seat in `/config` may carry its own `threshold`; the top-level
   `threshold` is the default for seats without one (§6.3, §8). Timers that support this
   announce `capabilities.config.seat_thresholds`. A v0.3 `PUT /config` body is still valid.
+- **Exit hold-off** (§8): a crossing ends only after the signal has stayed below the exit
+  level for `exit_hold_ms` (default 100), so a pass with several lobes is one crossing.
+  New `/config` field `exit_hold_ms`, announced as `capabilities.config.exit_hold_ms`.
+  Found on the first hardware test: hand-carried passes had 10–15 dB dips of 20–40 ms.
+- **Holes in the sample stream** are bridged by interpolation in the core (§8), and the
+  rising edge is searched from the enter sample, not from the start of the history.
 - **Discovery** (§6.1) is spelled out: service type, instance name, TXT keys and their
   values. `oftd` now advertises.
 
@@ -268,7 +274,7 @@ an `x-<vendor>-` prefix.
 | `crossings` | Timer detects crossings and emits `crossing` events; `/crossings?since=` works | `algorithms`, `replay` (crossings kept for catch-up), `fields` (optional crossing fields supported) |
 | `samples.stream` | Live signal over the WebSocket | `rate_hz` (max per seat), `decimate` (supported factors) |
 | `samples.history` | `/samples` returns past signal for a time window | `full_rate_s` (seconds kept at full rate), `reduced_rate_s`, `reduced_hz` |
-| `config` | `/config` accepts writes | `persist`, `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seats_per_node`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers) |
+| `config` | `/config` accepts writes | `persist`, `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seats_per_node`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
 | `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool) |
 | `direction` | Crossings include direction | reserved |
@@ -288,7 +294,7 @@ Adapters only need L1. All reference builds aim for L3.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, range_mhz, link}]`), seats (`[{seat, node, rate_hz}]`), `calibrated` |
-| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), `seats_per_node`, attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, network settings |
+| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), `seats_per_node`, attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, network settings |
 | GET | `/status` | uptime, temperature, link, per-Node state, clock-fit quality (residual µs), dropped samples, clients |
 | GET | `/time` | timer clock now, in µs |
 | GET | `/crossings?since=<seq>` | crossings after `seq`, for catching up after a reconnect |
@@ -309,7 +315,8 @@ seat only:
   ],
   "seats_per_node": 8,
   "threshold": { "mode": "auto", "snr_enter": 150, "hysteresis": 50 },
-  "min_lap_ms": 2000
+  "min_lap_ms": 2000,
+  "exit_hold_ms": 100
 }
 ```
 
@@ -404,6 +411,21 @@ Algorithm id: `edge_mid`.
   in dB between the noise floor and the peak. This is robust to the dip in the middle of the
   pulse caused by the quad antenna's axial null (RotorHazard's plateau midpoint is not).
 - `min_lap_ms` suppresses a second crossing within that window.
+- **Exit hold-off.** A crossing ends only once the smoothed trace has stayed below the exit
+  level for `exit_hold_ms` (default 100, range 0–1000; 0 ends it on the first sample below).
+  `t_exit` is the moment the trace first went below, not the end of the hold-off, so the
+  setting delays the report by that long but does not move any timestamp. This keeps a pass
+  with several lobes as one crossing; smoothing heavy enough to do the same blurs the edges
+  and loses weak passes. Dips below the edge level shorter than the hold-off are treated as
+  part of the pass on the rising flank too.
+- **Edges.** The rising edge is the trace's last climb through the edge level before the
+  enter sample (searched backwards from it); an earlier, separate bump in the pre-trigger
+  history is not part of the pass. If the edge level is above the enter level, the rise is
+  searched forwards from the enter sample.
+- **Holes.** Samples are expected at a steady rate. A hole of up to 256 samples (lost Node
+  batches) is filled by linear interpolation before detection, so the buffers stay evenly
+  spaced; a longer outage ends a crossing in progress with the `truncated` flag. A hole must
+  never be taken for the sample period.
 - Optional `flags`: `clipped`, `low_snr`, `hop_artifact`, `truncated`.
 - Implementation notes from `oft-core` (verified against synthetic passes, see the `oft`
   repo): keep ~128 samples of pre-trigger history so the rising edge is found even when the
