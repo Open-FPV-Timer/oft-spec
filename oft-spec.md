@@ -7,6 +7,10 @@
 - **Per-seat thresholds.** A seat in `/config` may carry its own `threshold`; the top-level
   `threshold` is the default for seats without one (§6.3, §8). Timers that support this
   announce `capabilities.config.seat_thresholds`. A v0.3 `PUT /config` body is still valid.
+- **Saved settings and network** (§6.3): `POST`/`DELETE /config/save` keep or forget the
+  power-on config (`capabilities.config.persist`); `GET`/`PUT /network` set DHCP or a fixed
+  address (`capabilities.network`), applied at the next start; `POST /restart`.
+  `/status` gains `timer_temp_c` beside the Node's `temp_c`.
 - **Exit hold-off** (§8): a crossing ends only after the signal has stayed below the exit
   level for `exit_hold_ms` (default 100), so a pass with several lobes is one crossing.
   New `/config` field `exit_hold_ms`, announced as `capabilities.config.exit_hold_ms`.
@@ -274,7 +278,8 @@ an `x-<vendor>-` prefix.
 | `crossings` | Timer detects crossings and emits `crossing` events; `/crossings?since=` works | `algorithms`, `replay` (crossings kept for catch-up), `fields` (optional crossing fields supported) |
 | `samples.stream` | Live signal over the WebSocket | `rate_hz` (max per seat), `decimate` (supported factors) |
 | `samples.history` | `/samples` returns past signal for a time window | `full_rate_s` (seconds kept at full rate), `reduced_rate_s`, `reduced_hz` |
-| `config` | `/config` accepts writes | `persist`, `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seats_per_node`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted) |
+| `network` | `/network` sets the Timer's address | `static` (bool) |
+| `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seats_per_node`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
 | `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool) |
 | `direction` | Crossings include direction | reserved |
@@ -295,7 +300,10 @@ Adapters only need L1. All reference builds aim for L3.
 |---|---|---|
 | GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, range_mhz, link}]`), seats (`[{seat, node, rate_hz}]`), `calibrated` |
 | GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), `seats_per_node`, attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, network settings |
-| GET | `/status` | uptime, temperature, link, per-Node state, clock-fit quality (residual µs), dropped samples, clients |
+| GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
+| GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
+| POST | `/restart` | Restart the Timer (202, then the connection drops) |
+| GET | `/status` | uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, per-Node state, clock-fit quality (residual µs), dropped samples, clients |
 | GET | `/time` | timer clock now, in µs |
 | GET | `/crossings?since=<seq>` | crossings after `seq`, for catching up after a reconnect |
 | GET | `/samples?seat=&from=&to=` | signal history, for re-deriving a missed lap |
@@ -368,7 +376,7 @@ The Timer then sends:
 {"type":"crossing","seq":42,"seat":0,"t_enter":81230120,"t_exit":81262480,
  "t_mid":81246300,"peak":-235,"snr":685,"flags":[]}
 
-{"type":"status","uptime_s":3600,"temp_c":41,"dropped":0,"clock_err_us":40}
+{"type":"status","uptime_s":3600,"temp_c":41,"timer_temp_c":38,"dropped":0,"clock_err_us":40}
 ```
 
 - Power values (`p`, `nf`, `peak`) are **tenths of a dB** as integers: relative dB unless
