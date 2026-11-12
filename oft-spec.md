@@ -575,3 +575,15 @@ oft/
 14. Clients must read advertised capability values (e.g. `samples.history.full_rate_s`) rather
     than assume the numbers in this document's examples; `oftd` keeps 600 s, the RP2350 host a
     30 s reduced trace.
+15. **Refusing channel plans a Node cannot do.** Not built. Today `PUT /config` accepts any
+   seats and frequencies in range, and the Timer finds out what it costs only when the Node
+   runs the plan. A Node's sample rate per seat depends on how many tuning positions the
+   plan needs, not on the seat count: one position covers channels up to 40 MHz apart
+   (two Raceband neighbours, or three on bands A, B and F), and each extra position
+   divides the rate. Eight seats spread so that every seat needs its own position would
+   run at roughly a quarter of the single-seat rate. The Timer should work out the
+   positions a plan needs before accepting it and refuse, with a reason, plans below a
+   stated floor: for example, with eight seats, require that the channels pair up so no
+   more than four positions are needed. Also to refuse: frequencies outside the Node's
+   `range_mhz`, and two seats too close to tell apart. The limits belong in `/info` so race
+   software can check a plan before sending it.
