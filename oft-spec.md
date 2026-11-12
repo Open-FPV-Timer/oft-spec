@@ -1,6 +1,15 @@
-# Open FPV Timer (OFT) — draft spec v0.4
+# Open FPV Timer (OFT) — draft spec v0.5
 
 **Status:** idea draft, 2026-11-08. Nothing here is built or final.
+
+**Changes from v0.4:**
+
+- **`seats_per_node` is gone** from `/config` and from `capabilities.config`. How seats are
+  spread over Nodes is the Timer's job, not a number the user sets (§4.1). Timers accept
+  the field from older clients and ignore it; they do not send it. Clients must not
+  require it in a `/config` reply.
+- **Planned, not built** (§4.1, open question 16): switching a Node off, and pinning a seat
+  to a Node.
 
 **Changes from v0.3:**
 
@@ -31,7 +40,7 @@
 - Message type key is `type` (was `t`). Live signal is `samples`, passes are `crossing`.
 - Added `fw.update`: the Timer finds and flashes its Nodes over USB or UART.
 - Added **RF silence** rule: no Wi-Fi or other transmitting at the gate.
-- **Pilots per Node** is spelled out in §4.1 with a `seats_per_node` config knob.
+- **Pilots per Node** is spelled out in §4.1 with a `seats_per_node` config knob (removed in v0.5).
 - Reference code exists: the `oft` repo (Rust workspace: `oft-nodelink`, `oft-core`,
   `oft-sim`, `oftd`) implements §5, §8 and §6 and is tested against synthetic passes.
 - B3 (Raspberry Pi Timer) now covers 8 Nodes: USB for data, shared SYNC wire for time.
@@ -166,9 +175,17 @@ needs one link per C5 (or a hub that aggregates them) plus clock mapping (§4.2)
 
 ### 4.1 Seat scheduling (in `oft-core`)
 
+The Timer decides which Node watches which seat. It is not a user setting: the Timer
+knows the Nodes and the channels, and the goal is always the best sample rate for every
+pilot.
+
 - If seats ≤ Nodes: **one seat per Node**, continuous dwell, no hopping. Most accurate.
-- If seats > Nodes: seats are spread across Nodes, and each Node hops. Priority goes to even
-  spacing and to keeping a seat on the same Node between heats.
+- If seats > Nodes: seats are spread across the Nodes, and each Node hops. What costs
+  sample rate is the number of **tuning positions** a Node needs, not its number of seats
+  (channels up to 40 MHz apart share one position), so the Timer balances positions:
+  neighbouring channels go to the same Node. Second priority: keep a seat on the same Node
+  between heats.
+- A Node that stops answering gets no seats; the others take them over.
 - `/info` reports each seat's actual sample rate and Node assignment.
 - With one shared gate antenna and a splitter, any Node can take any seat, so physical port
   order does not matter. Nodes are identified by chip id from their `Hello`.
@@ -178,9 +195,8 @@ hopping, the way FPVGateC5MK does. This is a first-class feature, not a fallback
 
 - A Node's `Hello` reports `max_seats` (the C5 reference: 8). The `Plan` message carries up
   to 8 `{seat, freq}` pairs per Node.
-- `/config` has `seats_per_node` (default: the Node's `max_seats`). The scheduler never puts
-  more seats on a Node than that. For a single-Node Timer, the number of **enabled seats**
-  is therefore the number of pilots on that Node.
+- The scheduler never puts more seats on a Node than its `max_seats`. For a single-Node
+  Timer, the number of **enabled seats** is the number of pilots on that Node.
 - The cost is sample rate and settling: a Node sampling at 1 kHz split 4 ways gives each
   seat 250 Hz, and every hop costs a settling window flagged `post_hop`. Timing accuracy
   degrades roughly with the number of seats. Guidance: **1 seat for the best timing, up to
@@ -188,6 +204,24 @@ hopping, the way FPVGateC5MK does. This is a first-class feature, not a fallback
   `rate_hz` so clients can show this.
 - The B1 single-pilot timer is the one-seat case of the same firmware; nothing changes in
   the protocol when a second pilot is added.
+
+**Planned for the first multi-Node Timer (not built).** Today's Timers (`oftd`, the RP2350
+firmware) drive one Node and give it every enabled seat. With more than one Node:
+
+- **Balancing is automatic** as described above, and re-run whenever the seats, the
+  channels or the set of working Nodes change.
+- **A Node can be switched off.** `/config` gains `nodes: [{ "id": "<chip id>", "enabled":
+  true }]`. A disabled Node gets no seats (for a Node that misbehaves, or to compare
+  Nodes). Nodes not listed are enabled. `/info` `nodes[]` shows `enabled` and whether the
+  Node is answering.
+- **A seat can be pinned.** A seat in `/config` may carry `"node": "<chip id>"`. Pinned
+  seats go where they are told; the rest are balanced around them. Pinning every seat is
+  fully manual assignment, so there is no separate automatic/manual switch. A pin to a
+  Node that is disabled or missing is refused with a reason.
+- **Reporting is unchanged:** `/info` `seats[]` already gives each seat's `node` and
+  `rate_hz`, which is how race software shows the result of the balancing.
+- Announced as `capabilities.config.nodes` (the switch) and `capabilities.config.seat_node`
+  (pinning), so clients offer them only where they exist.
 
 ### 4.2 Clocks
 
@@ -279,7 +313,7 @@ an `x-<vendor>-` prefix.
 | `samples.stream` | Live signal over the WebSocket | `rate_hz` (max per seat), `decimate` (supported factors) |
 | `samples.history` | `/samples` returns past signal for a time window | `full_rate_s` (seconds kept at full rate), `reduced_rate_s`, `reduced_hz` |
 | `network` | `/network` sets the Timer's address | `static` (bool) |
-| `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seats_per_node`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted) |
+| `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
 | `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool) |
 | `direction` | Crossings include direction | reserved |
@@ -299,7 +333,7 @@ Adapters only need L1. All reference builds aim for L3.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, range_mhz, link}]`), seats (`[{seat, node, rate_hz}]`), `calibrated` |
-| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), `seats_per_node`, attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, network settings |
+| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, network settings |
 | GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
 | GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
 | POST | `/restart` | Restart the Timer (202, then the connection drops) |
@@ -321,7 +355,6 @@ seat only:
     { "seat": 1, "freq_mhz": 5732, "enabled": true,
       "threshold": { "mode": "manual", "enter": -700, "exit": -760 } }
   ],
-  "seats_per_node": 8,
   "threshold": { "mode": "auto", "snr_enter": 150, "hysteresis": 50 },
   "min_lap_ms": 2000,
   "exit_hold_ms": 100
@@ -587,3 +620,7 @@ oft/
    more than four positions are needed. Also to refuse: frequencies outside the Node's
    `range_mhz`, and two seats too close to tell apart. The limits belong in `/info` so race
    software can check a plan before sending it.
+16. **Balancing seats over Nodes, Node on/off, seat pinning.** Designed in §4.1, not built:
+   it needs the first Timer with more than one Node. To settle then: how a pin and the
+   plan limits of question 15 interact, and whether a re-balance may move a seat during a
+   heat (it should not).
