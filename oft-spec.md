@@ -1,6 +1,13 @@
-# Open FPV Timer (OFT) — draft spec v0.5
+# Open FPV Timer (OFT) — draft spec v0.6
 
 **Status:** idea draft, 2026-11-08. Nothing here is built or final.
+
+**Changes from v0.5:**
+
+- **Pass window** (§8): crossings that start within `pass_window_ms` of the first one are
+  one pass, and only the strongest is reported, once the window has closed. For tracks
+  that fly close by the gate just before going through it. New `/config` field
+  `pass_window_ms` (default 0 = off), announced as `capabilities.config.pass_window_ms`.
 
 **Changes from v0.4:**
 
@@ -313,7 +320,7 @@ an `x-<vendor>-` prefix.
 | `samples.stream` | Live signal over the WebSocket | `rate_hz` (max per seat), `decimate` (supported factors) |
 | `samples.history` | `/samples` returns past signal for a time window | `full_rate_s` (seconds kept at full rate), `reduced_rate_s`, `reduced_hz` |
 | `network` | `/network` sets the Timer's address | `static` (bool) |
-| `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted) |
+| `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted), `pass_window_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
 | `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool) |
 | `direction` | Crossings include direction | reserved |
@@ -333,7 +340,7 @@ Adapters only need L1. All reference builds aim for L3.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, range_mhz, link}]`), seats (`[{seat, node, rate_hz}]`), `calibrated` |
-| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, network settings |
+| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, `pass_window_ms`, network settings |
 | GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
 | GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
 | POST | `/restart` | Restart the Timer (202, then the connection drops) |
@@ -357,7 +364,8 @@ seat only:
   ],
   "threshold": { "mode": "auto", "snr_enter": 150, "hysteresis": 50 },
   "min_lap_ms": 2000,
-  "exit_hold_ms": 100
+  "exit_hold_ms": 100,
+  "pass_window_ms": 0
 }
 ```
 
@@ -459,6 +467,18 @@ Algorithm id: `edge_mid`.
   with several lobes as one crossing; smoothing heavy enough to do the same blurs the edges
   and loses weak passes. Dips below the edge level shorter than the hold-off are treated as
   part of the pass on the rising flank too.
+- **Pass window.** With `pass_window_ms` above 0 (range 0–10000, default 0 = off), every
+  crossing that starts within that time of the first one belongs to the same pass. The
+  Timer reports one crossing for it: the one with the highest peak, with its own
+  timestamps unchanged. It is reported when the window has closed and no crossing is in
+  progress, so clients see it up to `pass_window_ms` late; `seq` is given at that moment.
+  `min_lap_ms` then counts from the reported crossing's `t_mid`. This is for tracks where
+  the quad flies close by the gate shortly before going through it: the fly-by can reach
+  the enter level, and without the window it is the lap and the real pass is suppressed by
+  `min_lap_ms`. "Strongest" is used, not "second", because the fly-by does not reach the
+  enter level every lap. If the signal never drops below the exit level between the
+  fly-by and the pass, they are one crossing and the window changes nothing. A client
+  that leaves the field out of a `PUT` switches the window off.
 - **Edges.** The rising edge is the trace's last climb through the edge level before the
   enter sample (searched backwards from it); an earlier, separate bump in the pre-trigger
   history is not part of the pass. If the edge level is above the enter level, the rise is
@@ -624,3 +644,24 @@ oft/
    it needs the first Timer with more than one Node. To settle then: how a pin and the
    plan limits of question 15 interact, and whether a re-balance may move a seat during a
    heat (it should not).
+17. **Wireless split Timers (future idea, nothing planned).** Split timing is rarely used
+   because every split gate needs an Ethernet run. Idea: one main Timer wired to the race
+   network, and battery-powered split Timers around the course that reach it by radio; the
+   main Timer forwards for them, so race software still talks to one place.
+   - Each split unit is a complete Timer (Node plus the detector), not a bare Node. It
+     timestamps crossings itself and sends crossings, not raw samples, so radio delay
+     does not affect timing. Clocks are aligned as in §7; expect about 1 ms over radio,
+     enough for splits.
+   - Radio candidate: Wi-Fi HaLow (802.11ah, sub-GHz). It carries IP, so the OFT Protocol
+     runs over it unchanged, and it is far from the 5.8 GHz the Nodes measure (§4.3 would
+     need an exception for it). It shares 902–928 MHz with 900 MHz control links
+     (Crossfire, ExpressLRS 900); judged acceptable, since those links are robust and
+     long range is not needed here. The C5 cannot do this itself: each unit needs a
+     separate HaLow module.
+   - To decide: whether the main Timer is a plain network bridge (each split Timer
+     appears on the LAN by itself) or a forwarder that presents the split Timers through
+     its own protocol endpoint; how split Timers are found and named; what a split
+     Timer does while the link is down (keep crossings and replay them); battery life;
+     regional bands and duty-cycle limits outside the US.
+   - Cheapest first test: an off-the-shelf Ethernet-to-HaLow bridge on an unmodified
+     Timer, both on a battery.
