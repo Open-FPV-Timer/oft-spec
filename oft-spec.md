@@ -1,6 +1,14 @@
-# Open FPV Timer (OFT) — draft spec v0.6
+# Open FPV Timer (OFT) — draft spec v0.7
 
-**Status:** idea draft, 2026-11-08. Nothing here is built or final.
+**Status:** idea draft, 2026-11-21. Nothing here is built or final.
+
+**Changes from v0.6:**
+
+- **Node wiring pins** (§6.3): `GET`/`PUT /pins` choose which of the Timer's pins carry a
+  wired Node's signals (`capabilities.pins`), applied at the next start. One firmware then
+  covers boards wired differently. The Node's own SYNC pin is a Node setting (§5).
+- **Future idea** (open question 18): a RotorHazard plugin that serves an RH timer as an
+  OFT Timer.
 
 **Changes from v0.5:**
 
@@ -320,6 +328,7 @@ an `x-<vendor>-` prefix.
 | `samples.stream` | Live signal over the WebSocket | `rate_hz` (max per seat), `decimate` (supported factors) |
 | `samples.history` | `/samples` returns past signal for a time window | `full_rate_s` (seconds kept at full rate), `reduced_rate_s`, `reduced_hz` |
 | `network` | `/network` sets the Timer's address | `static` (bool) |
+| `pins` | `/pins` sets which Timer pins a wired Node is on | none |
 | `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted), `pass_window_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
 | `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool) |
@@ -343,6 +352,7 @@ Adapters only need L1. All reference builds aim for L3.
 | GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, `pass_window_ms`, network settings |
 | GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
 | GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
+| GET / PUT | `/pins` | With `capabilities.pins`. For Timers whose Node is wired to GPIO pins. Body: the pin (GPIO number) for each signal, `{"tx":4,"rx":5,"sync":6,"en":7,"boot":8}`, where `tx` is the Timer's transmit (to the Node's RX). All five are required. Stored at once, used from the next start; a body the hardware cannot do is refused with 400 and a reason. `GET` answers `{"saved":{...},"using":{...},"defaults":{...},"choices":{"tx":[...],"rx":[...],"out":[...]},"restart_needed":bool}`; `choices.out` lists the pins allowed for `sync`, `en` and `boot`. Clients should keep this out of everyday view: it only changes when a board is wired differently |
 | POST | `/restart` | Restart the Timer (202, then the connection drops) |
 | GET | `/status` | uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, per-Node state, clock-fit quality (residual µs), dropped samples, clients |
 | GET | `/time` | timer clock now, in µs |
@@ -665,3 +675,12 @@ oft/
      regional bands and duty-cycle limits outside the US.
    - Cheapest first test: an off-the-shelf Ethernet-to-HaLow bridge on an unmodified
      Timer, both on a battery.
+18. **A RotorHazard timer as an OFT Timer (future idea, nothing planned).** The reverse of
+   rh-oft: a RotorHazard plugin that serves the OFT Protocol from an RH timer, so OFT
+   race software (Grid and others) can use hardware people already own.
+   - RH reports passes it has already detected, with peaks and nadirs rather than a
+     full-rate signal (§2). Such a Timer would announce `crossings` and leave out
+     `samples.stream` and `samples.history`; its level (§6.2) is to be decided.
+   - To decide: how RH's EnterAt/ExitAt map onto `/config` thresholds (RH's RSSI is not
+     in dB); what the timer clock is (the RH server's) and its error; whether the plugin
+     also allows RH to run its own race at the same time.
