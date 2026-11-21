@@ -7,6 +7,8 @@
 - **Node wiring pins** (§6.3): `GET`/`PUT /pins` choose which of the Timer's pins carry a
   wired Node's signals (`capabilities.pins`), applied at the next start. One firmware then
   covers boards wired differently. The Node's own SYNC pin is a Node setting (§5).
+- **Nodes name their chip** (§5): an optional chip name at the end of `Hello`, which the
+  Timer shows as the node's `chip` in `/info`. Nodes that send none are ESP32-C5s.
 - **Future idea** (open question 18): a RotorHazard plugin that serves an RH timer as an
   OFT Timer.
 
@@ -270,7 +272,7 @@ Anything transmitting at the gate raises the noise floor the Nodes are measuring
 
 | Direction | Message | Contents |
 |---|---|---|
-| Node → Timer | `Hello` | chip id, firmware version, link protocol version, tunable range, max seats, features (`sync`, `iq_dump`) |
+| Node → Timer | `Hello` | chip id, firmware version, link protocol version, tunable range, max seats, features (`sync`, `iq_dump`), chip name (optional, e.g. `esp32c5`, `stm32f1-rx5808`; shown as the node's `chip` in `/info`) |
 | Timer → Node | `Plan` | list of `{seat, freq_mhz}`, dwell and hop order, filter bandwidth, gain or attenuation |
 | Node → Timer | `Samples` | seat, t0 (Node µs), dt, `int16[]` power in 0.1 dB, noise floor, flags (`clipped`, `post_hop`) |
 | Node → Timer | `SyncEdge` | Node µs timestamp of a SYNC edge |
