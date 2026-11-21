@@ -333,7 +333,7 @@ an `x-<vendor>-` prefix.
 | `pins` | `/pins` sets which Timer pins a wired Node is on | none |
 | `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted), `pass_window_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
-| `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool) |
+| `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool), `node_image` (optional: the kind of file `/fw/node` takes when it is not ESP32 firmware, e.g. `stm32f1`) |
 | `direction` | Crossings include direction | reserved |
 
 **Conformance levels** are bundles of capabilities:
