@@ -1,4 +1,6 @@
-"""OFT B1 wiring sheet: Waveshare RP2350-POE-ETH <-> Seeed XIAO ESP32-C5."""
+"""OFT B1 wiring sheet: Waveshare RP2350-POE-ETH <-> Seeed XIAO ESP32-C5.
+
+GPL-3.0-or-later."""
 import sys
 from reportlab.lib.colors import HexColor, white
 from reportlab.lib.pagesizes import letter, landscape

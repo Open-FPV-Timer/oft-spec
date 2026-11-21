@@ -96,7 +96,7 @@ OFT is an open, cheap, easy-to-build **timer** for FPV racing.
 - **Flexible:** the same Nodes and core support a bench dongle, a single-pilot PoE gate box,
   an 8-pilot box, or a Linux timer.
 - **Easy to build:** every reference build uses off-the-shelf boards.
-- **Open:** the spec is published (suggested licence: CC BY 4.0). Node firmware is GPL-3.0
+- **Open:** the spec is published under CC BY 4.0 (`LICENSE`). Node firmware is GPL-3.0
   (esp-sdr base). `oft-core` and the hosts are GPL-3.0 or AGPL-3.0, compatible with Grid's
   AGPL-3.0.
 - **Receiver-agnostic:** the ESP32-C5 is the reference Node, but anything that speaks the

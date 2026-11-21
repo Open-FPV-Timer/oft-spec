@@ -53,3 +53,10 @@ OFT started from reading other people's open work. These projects shaped it:
 
 The [research notes](research-notes-2026-11.md)
 record what we learned from each. If you like OFT, go and look at theirs.
+
+## Licence
+
+The specification and the notes here are licensed under
+[Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/) (see
+[LICENSE](LICENSE)): anyone may implement, share and adapt them, with credit. The one
+script, `make_wiring_pdf.py`, is GPL-3.0-or-later like the rest of the project's code.
