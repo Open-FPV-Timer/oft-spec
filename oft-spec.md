@@ -1,6 +1,19 @@
-# Open FPV Timer (OFT) — draft spec v0.7
+# Open FPV Timer (OFT) — draft spec v0.8
 
-**Status:** idea draft, 2026-11-21. Nothing here is built or final.
+**Status:** idea draft, 2026-11-22. Nothing here is built or final.
+
+**Changes from v0.7:**
+
+- **Level units** (§5, §6.3, §6.4, §8): a Node says what its level numbers measure, and
+  the Timer passes it on as `nodes[].level` in `/info` (`{"unit":"dB","scale":0.1}` or
+  `{"unit":"mV","scale":1}`). Samples, floor, thresholds, `peak` and `snr` are all in that
+  unit. Before, every level was called tenths of a dB, which was untrue for a Node that
+  reads an RX5808's signal-strength pin. Clients must read the unit instead of assuming
+  dB. This also settles how RotorHazard-style levels map onto `/config` (open question 18):
+  they are raw levels in the Node's unit, set as `manual` thresholds.
+- `fw.update.node_image` names the kind of firmware file `/fw/node` takes when it is not
+  ESP32 firmware.
+- `/status` seats carry `node`, the id of the Node serving the seat.
 
 **Changes from v0.6:**
 
@@ -272,9 +285,9 @@ Anything transmitting at the gate raises the noise floor the Nodes are measuring
 
 | Direction | Message | Contents |
 |---|---|---|
-| Node → Timer | `Hello` | chip id, firmware version, link protocol version, tunable range, max seats, features (`sync`, `iq_dump`), chip name (optional, e.g. `esp32c5`, `stm32f1-rx5808`; shown as the node's `chip` in `/info`) |
+| Node → Timer | `Hello` | chip id, firmware version, link protocol version, tunable range, max seats, features (`sync`, `iq_dump`, `dfu`, `level_mv`: its levels are millivolts, not tenths of a dB, §6.4), chip name (optional, e.g. `esp32c5`, `stm32f1-rx5808`; shown as the node's `chip` in `/info`) |
 | Timer → Node | `Plan` | list of `{seat, freq_mhz}`, dwell and hop order, filter bandwidth, gain or attenuation |
-| Node → Timer | `Samples` | seat, t0 (Node µs), dt, `int16[]` power in 0.1 dB, noise floor, flags (`clipped`, `post_hop`) |
+| Node → Timer | `Samples` | seat, t0 (Node µs), dt, `int16[]` power in the Node's level unit, noise floor, flags (`clipped`, `post_hop`) |
 | Node → Timer | `SyncEdge` | Node µs timestamp of a SYNC edge |
 | Timer ↔ Node | `Ping` / `Pong` | Timer time, then Node time, for ping-fit clock mapping |
 | Node → Timer | `Status` | temperature, hop errors, overruns, gain state |
@@ -350,7 +363,7 @@ Adapters only need L1. All reference builds aim for L3.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, range_mhz, link}]`), seats (`[{seat, node, rate_hz}]`), `calibrated` |
+| GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, fw, range_mhz, max_seats, level, link}]`; `level` is the unit of that Node's levels, §6.4), seats (`[{seat, node, rate_hz}]`), `calibrated` |
 | GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, `pass_window_ms`, network settings |
 | GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
 | GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
@@ -385,6 +398,10 @@ seat only:
   replaces the whole config, so a body without seat thresholds (any v0.3 client) clears them.
 - `GET` returns a seat's `threshold` only when that seat has its own.
 - `status.seats[].enter` / `exit` report the levels each seat is actually using.
+- Threshold values (`snr_enter`, `hysteresis`, `enter`, `exit`) are integers in the level
+  unit of the Node serving the seat (§6.4): 150 is 15 dB on a Node that reports dB and
+  150 mV on one that reports millivolts. A client that copies a config from one Timer to
+  another must check that the units match.
 - Clients MUST NOT send seat thresholds unless the Timer announces
   `capabilities.config.seat_thresholds`.
 
@@ -432,8 +449,28 @@ The Timer then sends:
 {"type":"status","uptime_s":3600,"temp_c":41,"timer_temp_c":38,"dropped":0,"clock_err_us":40}
 ```
 
-- Power values (`p`, `nf`, `peak`) are **tenths of a dB** as integers: relative dB unless
-  `/info` says `"calibrated":true`, then tenths of a dBm. `snr` is tenths of a dB.
+- **Level units.** Every level is an integer in the unit of the Node that measured it:
+  samples (`p`, `nf`), `status.seats[]` (`rssi`, `floor`, `enter`, `exit`), crossings
+  (`peak`, `snr`) and the thresholds in `/config`. `/info` gives the unit per Node:
+
+  ```json
+  "nodes": [{ "id": "10bda3feffc8", "chip": "esp32c5", "level": { "unit": "dB", "scale": 0.1 }, ... }]
+  ```
+
+  Multiply a level by `scale` and label it with `unit` to show it. A seat's Node is
+  `status.seats[].node` (the Node's `id`). A Node missing `level`, or a Timer with no Node
+  yet, means `dB` at `0.1`.
+  - `"dB"`, scale `0.1`: tenths of a dB. Relative to the Node's own full scale unless
+    `/info` says `"calibrated":true`, then tenths of a dBm. Differences are real dB.
+  - `"mV"`, scale `1`: millivolts on a receiver's analogue signal-strength output (an
+    RX5808's RSSI pin). It rises with signal but not as a straight line in dB, and it
+    flattens near the top, so differences are millivolts and nothing more. Levels from
+    two such Nodes compare only roughly, and not at all with a dB Node.
+  - Other units may be added; a client shows any unit it does not know as given.
+  - `snr` is `peak` minus the noise floor in the same unit. The name is kept; it is a
+    signal-to-noise ratio only when the unit is dB.
+  - Clients must not do dB arithmetic (ratios, averaging in linear power, comparing
+    Timers) on a unit other than `"dB"`.
 - Samples are batched every 20–50 ms. `decimate` lowers the rate.
 - `crossings.since` replays buffered crossings after that `seq` (reconnect catch-up).
 - A binary sample frame is reserved for v2 (offered via `encodings`).
@@ -461,9 +498,11 @@ Algorithm id: `edge_mid`.
 - The core keeps a smoothed power trace per seat. It drops or interpolates samples flagged
   `post_hop`, and tracks the **noise floor**.
 - **Threshold modes:**
-  - `auto`: enter at floor + `snr_enter` dB (default 15), exit at enter − `hysteresis` dB
-    (default 5).
-  - `manual`: absolute enter and exit levels (RotorHazard-style EnterAt/ExitAt).
+  - `auto`: enter at floor + `snr_enter` (default 150 counts: 15 dB), exit at enter −
+    `hysteresis` (default 50: 5 dB). On a Node whose unit is not dB the same numbers are
+    counts of that unit above the floor, and the defaults are not tuned for it.
+  - `manual`: absolute enter and exit levels (RotorHazard-style EnterAt/ExitAt), in the
+    Node's level unit. The natural mode for a millivolt Node.
   - Each seat uses its own threshold if it has one, else the Timer-wide one (§6.3). Mode and
     values are chosen per seat; `min_lap_ms` stays Timer-wide.
 - A **crossing** spans enter to exit. Timers MUST report `t_enter`, `t_exit` and `t_mid`.
@@ -683,6 +722,8 @@ oft/
    - RH reports passes it has already detected, with peaks and nadirs rather than a
      full-rate signal (§2). Such a Timer would announce `crossings` and leave out
      `samples.stream` and `samples.history`; its level (§6.2) is to be decided.
-   - To decide: how RH's EnterAt/ExitAt map onto `/config` thresholds (RH's RSSI is not
-     in dB); what the timer clock is (the RH server's) and its error; whether the plugin
+   - RH's EnterAt/ExitAt map onto `manual` thresholds in a raw level unit (§6.4), as
+     the STM32 + RX5808 Node already does with millivolts; such a Timer would announce
+     its own unit (RH's 0 to 255 counts).
+   - To decide: what the timer clock is (the RH server's) and its error; whether the plugin
      also allows RH to run its own race at the same time.
