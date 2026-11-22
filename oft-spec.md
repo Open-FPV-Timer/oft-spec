@@ -1,6 +1,20 @@
-# Open FPV Timer (OFT) — draft spec v0.8
+# Open FPV Timer (OFT) — draft spec v0.9
 
 **Status:** idea draft, 2026-11-22. Nothing here is built or final.
+
+**Changes from v0.8:**
+
+- **Control** (§6.2, §6.3, §6.6): one client at a time may change a Timer. A client claims
+  control on its stream; while a claim holds control, the Timer refuses every write that
+  does not carry the holder's key (423). Claims stand for as long as their stream is open,
+  the first one holds control and later ones wait. `GET /control` lists them, and the
+  Timer's own page, and nothing else, can hand control to any of them with
+  `POST /control`. A holder whose stream drops keeps control for 10 s and resumes with its
+  key. With no claims, anyone may write, as before.
+- Every stream now gets a `control` message straight after `hello`, subscribed or not.
+- `/status` carries `config_rev`, which changes whenever the config or its saved state
+  does, and `control`, the holder. Clients that show settings re-read `/config` when
+  `config_rev` changes.
 
 **Changes from v0.7:**
 
@@ -352,6 +366,7 @@ an `x-<vendor>-` prefix.
 | `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted), `pass_window_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
 | `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool), `node_image` (optional: the kind of file `/fw/node` takes when it is not ESP32 firmware, e.g. `stm32f1`) |
+| `control` | One client at a time may write (§6.6): `control` messages on the stream, `/control` | none |
 | `direction` | Crossings include direction | reserved |
 
 **Conformance levels** are bundles of capabilities:
@@ -373,8 +388,9 @@ Adapters only need L1. All reference builds aim for L3.
 | GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
 | GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
 | GET / PUT | `/pins` | With `capabilities.pins`. For Timers whose Node is wired to GPIO pins. Body: the pin (GPIO number) for each signal, `{"tx":4,"rx":5,"sync":6,"en":7,"boot":8}`, where `tx` is the Timer's transmit (to the Node's RX). All five are required. Stored at once, used from the next start; a body the hardware cannot do is refused with 400 and a reason. `GET` answers `{"saved":{...},"using":{...},"defaults":{...},"choices":{"tx":[...],"rx":[...],"out":[...]},"restart_needed":bool}`; `choices.out` lists the pins allowed for `sync`, `en` and `boot`. Clients should keep this out of everyday view: it only changes when a board is wired differently |
+| GET / POST | `/control` | With `capabilities.control` (§6.6). `GET` lists the claims; `POST` hands control to one of them or frees it |
 | POST | `/restart` | Restart the Timer (202, then the connection drops) |
-| GET | `/status` | uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, per-Node state, clock-fit quality (residual µs), dropped samples, clients |
+| GET | `/status` | uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, per-Node state, clock-fit quality (residual µs), dropped samples, clients, `config_rev` (a number that changes whenever `/config` or its saved state changes; it restarts with the Timer), `control` (the holder as `{"id", "name"}`, or `null`; §6.6) |
 | GET | `/time` | timer clock now, in µs |
 | GET | `/crossings?since=<seq>` | crossings after `seq`, for catching up after a reconnect |
 | GET | `/samples?seat=&from=&to=` | signal history, for re-deriving a missed lap |
@@ -484,8 +500,116 @@ The Timer then sends:
 
 - Crossings carry a monotonic `seq` per `boot_id`. A `boot_id` change means the Timer
   rebooted; clients reset their `seq` tracking.
-- v1 has no authentication and assumes a trusted race LAN. An optional bearer token is
-  reserved.
+- v1 has no authentication and no encryption, and assumes a trusted race LAN: everything
+  is plain HTTP and WebSocket, meant to stay on the local race network. Anyone who can
+  reach the Timer on that network can read everything it serves and, with a little effort,
+  change it. Keep the Timer off networks that strangers can join, and do not forward its
+  port to the internet. An optional bearer token is reserved.
+- Control (§6.6) does not change that. It is a technical control that keeps well-behaved
+  clients from undoing each other's settings, not a security measure.
+
+### 6.6 Control: one writer at a time
+
+With `capabilities.control`. Any number of clients may read and stream. Writes are every
+request under `/oft/v1` that is not a `GET`, except `POST /control`. Without this, two
+clients that both write `/config` undo each other's settings, since a `PUT` replaces the
+whole config.
+
+**Claims.** A client that means to write says so on its stream, with a name for people to
+read (1 to 32 printable ASCII characters; the Timer drops `"`, `\` and anything else):
+
+```json
+{"type":"control","claim":"RotorHazard"}
+{"type":"control","claim":"RotorHazard","key":"9f3a61c2"}
+{"type":"control","release":true}
+```
+
+- A claim stands until its stream closes or it sends `release`. One claim per stream; a
+  second `claim` on the same stream renames it.
+- At most one standing claim **holds** control. A claim made while nobody holds control
+  gets it, so the client that claims first is the writer. A claim made while another
+  holds it waits. A client has no way to take control from another: only the person at
+  the Timer's page moves it (below).
+- When the holder's claim ends, control passes to the claim that has stood longest. With
+  no claims left, nobody holds control.
+- **A dropped stream.** If the holder's stream closes without `release`, its claim stands
+  for 10 more seconds and keeps control, and its key keeps working for writes. A `claim`
+  that carries the `key` of a standing claim takes that claim up on the new stream, with
+  the same id, key and place, from whichever stream had it before (the Timer may not have
+  noticed yet that the old one is dead). After 10 s without that, the claim ends. A `key`
+  that matches no standing claim is ignored, and the message is an ordinary new claim. A
+  waiting claim ends as soon as its stream closes.
+- A stream that only claims and never sends `sub` is a normal, long-lived stream. Both
+  WebSocket ping frames and `{"type":"ping"}` are answered, so a client can tell a dead
+  stream by sending one every few seconds.
+- A Timer keeps a limited number of claims (at least 4). A claim over the limit is
+  answered with `{"type":"error","code":"control_full","msg":"..."}`. A Timer may also
+  limit how many streams are open at once (the RP2350 Timer: 4) and close one over the
+  limit with WebSocket code 1013.
+
+After `hello`, and again whenever any claim or the holder changes, the Timer tells every
+stream where things stand:
+
+```json
+{"type":"control","holder":{"id":3,"name":"RotorHazard"},"claim":5}
+{"type":"control","holder":{"id":3,"name":"RotorHazard"},"claim":3,"key":"9f3a61c2"}
+{"type":"control","holder":null,"claim":null}
+```
+
+`holder` is the claim that holds control. `claim` is the id of this stream's own claim, or
+`null`. `key` is present only on the holder's stream. Claim ids are not reused within one
+`boot_id`.
+
+**Writes.** While a claim holds control, a write must carry the holder's key in the
+`OFT-Control` request header. Any other write is refused with `423` and
+`{"error":"controlled by RotorHazard"}`, and changes nothing. While nobody holds control,
+writes need no key and one that carries a key is accepted all the same. A holder that
+gets a `423` has lost control and learns the rest from its stream.
+
+**Choosing the writer.** When the wrong client holds control (clients connected in the
+wrong order, or settings need a change by hand), the person running the Timer puts it right
+on the Timer's own page. `POST /control` is for that page alone:
+
+| Method | Path | Body | |
+|---|---|---|---|
+| GET | `/control` | | `{"holder": 3, "claims": [{"id": 3, "name": "RotorHazard", "holds": true, "connected": true}, {"id": 5, "name": "Timer page", "holds": false, "connected": true}]}`, claims oldest first; `holder` is an id or `null`; `connected` is false for a holder whose stream has dropped and may still come back |
+| POST | `/control` | `{"grant": 5}` | Control moves to claim 5; the claim that held it waits. `404` if there is no such claim. Answers as `GET` |
+| POST | `/control` | `{"grant": null}` | Nobody holds control, so anyone may write. It stays that way until a new claim or another grant; the standing claims wait. Answers as `GET` |
+
+`POST /control` needs no key: it is the way back in when the holder is the wrong one. The
+Timer accepts it only from a page it served itself: the request must carry an `Origin`
+header that names the same host and port as its `Host` header, which a browser adds to
+every `POST` and a page from anywhere else cannot fake. Anything else gets `403`. A body
+without `grant` gets `400`. The page takes control for itself the same way: it makes a
+claim and grants it.
+
+**Not security.** Control is a technical control between clients that mean well. It does
+not stop someone on the race network who means harm (§6.5):
+
+- The holder's key travels in plain HTTP, in its `control` messages and in the header of
+  every write. Anyone who can see that traffic can copy the key and write as the holder.
+- A program can set the `Origin` header by hand and use `POST /control` as if it were the
+  Timer's page.
+- Nothing proves who a claim is: any client can claim under any name, `RotorHazard`
+  included.
+
+All of this needs access to the local network the Timer is on. What control does stop is
+the ordinary case: two honest clients, or a forgotten browser tab, changing settings
+under the one that is running the race.
+
+**What clients do.**
+
+- A client that sets a Timer up on its own (race software) claims when it connects, writes
+  only while it holds control or nobody does, and tells its user when another client
+  holds it. When another client stops holding control, it sends its settings again, since
+  they may have been changed. After a reconnect it claims again with its key.
+- The Timer's page claims only when the person at it asks to take control, and releases
+  when they are done or when control goes elsewhere, so it is not left waiting in line to
+  inherit control from race software.
+- A name should tell two installations apart, e.g. `RotorHazard pi-timer`.
+- A client other than the Timer's page never sends `POST /control`.
+- A client that only watches never claims.
+- Every client that shows settings follows `config_rev` in `status`.
 
 ## 7. Time across Timers
 
