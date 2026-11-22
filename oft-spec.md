@@ -9,11 +9,16 @@
   `{"unit":"mV","scale":1}`). Samples, floor, thresholds, `peak` and `snr` are all in that
   unit. Before, every level was called tenths of a dB, which was untrue for a Node that
   reads an RX5808's signal-strength pin. Clients must read the unit instead of assuming
-  dB. This also settles how RotorHazard-style levels map onto `/config` (open question 18):
-  they are raw levels in the Node's unit, set as `manual` thresholds.
+  dB. RotorHazard-style EnterAt / ExitAt levels map onto `/config` as raw levels in the
+  Node's unit, set as `manual` thresholds.
 - `fw.update.node_image` names the kind of firmware file `/fw/node` takes when it is not
   ESP32 firmware.
 - `/status` seats carry `node`, the id of the Node serving the seat.
+- **Dropped:** the idea of a RotorHazard plugin that serves an RH timer as an OFT Timer
+  (was open question 18). RotorHazard hardware becomes an OFT Timer by running OFT
+  firmware on its Node and `oftd` on its Pi, with no RotorHazard involved.
+- The rh-oft plugin now sends each seat its own thresholds and reads level units (open
+  question 13).
 
 **Changes from v0.6:**
 
@@ -22,8 +27,8 @@
   covers boards wired differently. The Node's own SYNC pin is a Node setting (§5).
 - **Nodes name their chip** (§5): an optional chip name at the end of `Hello`, which the
   Timer shows as the node's `chip` in `/info`. Nodes that send none are ESP32-C5s.
-- **Future idea** (open question 18): a RotorHazard plugin that serves an RH timer as an
-  OFT Timer.
+- **Future idea**: a RotorHazard plugin that serves an RH timer as an OFT Timer (dropped
+  in v0.8).
 
 **Changes from v0.5:**
 
@@ -675,7 +680,7 @@ oft/
     module, and total power for 8 C5s plus a Pi (802.3af vs 802.3at)?
 12. B5 HAT: right-angle USB jumper vs Zero 2 pogo pins vs the RP2350-over-UART option.
 13. ~~Per-seat thresholds.~~ **Done in v0.4:** `config.seats[].threshold` overrides the Timer
-    default (§6.3). The rh-oft plugin still forwards seat 0's levels only.
+    default (§6.3). The rh-oft plugin sends each seat its own levels.
 14. Clients must read advertised capability values (e.g. `samples.history.full_rate_s`) rather
     than assume the numbers in this document's examples; `oftd` keeps 600 s, the RP2350 host a
     30 s reduced trace.
@@ -716,14 +721,3 @@ oft/
      regional bands and duty-cycle limits outside the US.
    - Cheapest first test: an off-the-shelf Ethernet-to-HaLow bridge on an unmodified
      Timer, both on a battery.
-18. **A RotorHazard timer as an OFT Timer (future idea, nothing planned).** The reverse of
-   rh-oft: a RotorHazard plugin that serves the OFT Protocol from an RH timer, so OFT
-   race software (Grid and others) can use hardware people already own.
-   - RH reports passes it has already detected, with peaks and nadirs rather than a
-     full-rate signal (§2). Such a Timer would announce `crossings` and leave out
-     `samples.stream` and `samples.history`; its level (§6.2) is to be decided.
-   - RH's EnterAt/ExitAt map onto `manual` thresholds in a raw level unit (§6.4), as
-     the STM32 + RX5808 Node already does with millivolts; such a Timer would announce
-     its own unit (RH's 0 to 255 counts).
-   - To decide: what the timer clock is (the RH server's) and its error; whether the plugin
-     also allows RH to run its own race at the same time.
