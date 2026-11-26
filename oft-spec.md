@@ -1,6 +1,23 @@
-# Open FPV Timer (OFT) — draft spec v0.9
+# Open FPV Timer (OFT) — draft spec v0.10
 
 **Status:** idea draft, 2026-11-22. Nothing here is built or final.
+
+**Changes from v0.9:**
+
+- **Several Nodes on one Timer** (§4.1, §6.3): the first multi-Node Timer exists (the RP2350
+  firmware, up to four wired Nodes). Seats are balanced over the Nodes that are answering,
+  automatically, as §4.1 always said; switching a Node off and pinning a seat are still to
+  come.
+- `/status` gains `nodes[]`: each Node's link slot, id, whether it is connected, its
+  temperature, clock and link counts. The Node fields `/status` already had stay, and now
+  sum the Nodes up: `node_connected` is true only if every wired Node is, the clock fields
+  are the worst Node's, `temp_c` the hottest, the `link` counts added together.
+- `/info` `nodes[]` gains `slot` and `connected`. `seats[].node` is `null` for a seat no
+  Node is serving.
+- `/pins` (§6.3) **changed shape**: the links are a list, one per Node,
+  `{"nodes":[{"tx":4,"rx":5},{"tx":0,"rx":1}],"sync":6,"en":7,"boot":8}`. How many Nodes the
+  Timer drives is how many links are listed. `capabilities.pins.max_nodes` says how many it
+  can. SYNC, EN and BOOT are one wire each, shared by every Node.
 
 **Changes from v0.8:**
 
@@ -254,11 +271,19 @@ hopping, the way FPVGateC5MK does. This is a first-class feature, not a fallback
 - The B1 single-pilot timer is the one-seat case of the same firmware; nothing changes in
   the protocol when a second pilot is added.
 
-**Planned for the first multi-Node Timer (not built).** Today's Timers (`oftd`, the RP2350
-firmware) drive one Node and give it every enabled seat. With more than one Node:
+**Multi-Node Timers.** The RP2350 firmware drives up to four Nodes (`oft-core`'s `sched`
+and `Hosts`); `oftd` still drives one and gives it every enabled seat.
 
 - **Balancing is automatic** as described above, and re-run whenever the seats, the
-  channels or the set of working Nodes change.
+  channels or the set of working Nodes change. A Node counts as working while the Timer
+  hears from it; one silent for 3 s loses its seats to the others and takes seats back
+  when it returns. A seat that stays on its Node and frequency is not disturbed by a
+  re-run: its detector, floor and sample stream carry on. The balance: no Node gets more
+  tuning positions than it must, then no Node more seats than it must, then as few seats
+  as possible change Node.
+
+Still planned (not built):
+
 - **A Node can be switched off.** `/config` gains `nodes: [{ "id": "<chip id>", "enabled":
   true }]`. A disabled Node gets no seats (for a Node that misbehaves, or to compare
   Nodes). Nodes not listed are enabled. `/info` `nodes[]` shows `enabled` and whether the
@@ -362,7 +387,7 @@ an `x-<vendor>-` prefix.
 | `samples.stream` | Live signal over the WebSocket | `rate_hz` (max per seat), `decimate` (supported factors) |
 | `samples.history` | `/samples` returns past signal for a time window | `full_rate_s` (seconds kept at full rate), `reduced_rate_s`, `reduced_hz` |
 | `network` | `/network` sets the Timer's address | `static` (bool) |
-| `pins` | `/pins` sets which Timer pins a wired Node is on | none |
+| `pins` | `/pins` sets which Timer pins the wired Nodes are on | `max_nodes` (how many Node links the Timer has) |
 | `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted), `pass_window_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
 | `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool), `node_image` (optional: the kind of file `/fw/node` takes when it is not ESP32 firmware, e.g. `stm32f1`) |
@@ -387,10 +412,10 @@ Adapters only need L1. All reference builds aim for L3.
 | GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, `pass_window_ms`, network settings |
 | GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
 | GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
-| GET / PUT | `/pins` | With `capabilities.pins`. For Timers whose Node is wired to GPIO pins. Body: the pin (GPIO number) for each signal, `{"tx":4,"rx":5,"sync":6,"en":7,"boot":8}`, where `tx` is the Timer's transmit (to the Node's RX). All five are required. Stored at once, used from the next start; a body the hardware cannot do is refused with 400 and a reason. `GET` answers `{"saved":{...},"using":{...},"defaults":{...},"choices":{"tx":[...],"rx":[...],"out":[...]},"restart_needed":bool}`; `choices.out` lists the pins allowed for `sync`, `en` and `boot`. Clients should keep this out of everyday view: it only changes when a board is wired differently |
+| GET / PUT | `/pins` | With `capabilities.pins`. For Timers whose Nodes are wired to GPIO pins. Body: the pin (GPIO number) for each signal, `{"nodes":[{"tx":4,"rx":5}],"sync":6,"en":7,"boot":8}`. `nodes` has one serial link per Node, first Node first, and its length is how many Nodes the Timer drives (1 to `capabilities.pins.max_nodes`); `tx` is the Timer's transmit (to the Node's RX). `sync`, `en` and `boot` are one wire each, shared by every Node. Stored at once, used from the next start; a body the hardware cannot do is refused with 400 and a reason. `GET` answers `{"saved":{...},"using":{...},"defaults":{...},"choices":{"nodes":[{"tx":[...],"rx":[...]}, ...],"out":[...]},"restart_needed":bool}`; `choices.nodes[k]` lists the pins the k-th link may use (links differ: some are hardware UARTs with fixed pins) and `choices.out` the pins allowed for `sync`, `en` and `boot`. Clients should keep this out of everyday view: it only changes when a board is wired differently |
 | GET / POST | `/control` | With `capabilities.control` (§6.6). `GET` lists the claims; `POST` hands control to one of them or frees it |
 | POST | `/restart` | Restart the Timer (202, then the connection drops) |
-| GET | `/status` | uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, per-Node state, clock-fit quality (residual µs), dropped samples, clients, `config_rev` (a number that changes whenever `/config` or its saved state changes; it restarts with the Timer), `control` (the holder as `{"id", "name"}`, or `null`; §6.6) |
+| GET | `/status` | uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, clock-fit quality (residual µs), dropped samples, `nodes[]` (per Node: `slot`, `id`, `connected`, `temp_c`, `clock_synced`, `clock_source`, `clock_err_us`, `drift_ppm`, `link`; with several Nodes the top-level Node fields sum these up: the worst clock, the hottest, counts added, `node_connected` only if all are), clients, `config_rev` (a number that changes whenever `/config` or its saved state changes; it restarts with the Timer), `control` (the holder as `{"id", "name"}`, or `null`; §6.6) |
 | GET | `/time` | timer clock now, in µs |
 | GET | `/crossings?since=<seq>` | crossings after `seq`, for catching up after a reconnect |
 | GET | `/samples?seat=&from=&to=` | signal history, for re-deriving a missed lap |
@@ -479,7 +504,7 @@ The Timer then sends:
   ```
 
   Multiply a level by `scale` and label it with `unit` to show it. A seat's Node is
-  `status.seats[].node` (the Node's `id`). A Node missing `level`, or a Timer with no Node
+  `status.seats[].node` (the Node's `id`; `null` while no Node serves the seat). A Node missing `level`, or a Timer with no Node
   yet, means `dB` at `0.1`.
   - `"dB"`, scale `0.1`: tenths of a dB. Relative to the Node's own full scale unless
     `/info` says `"calibrated":true`, then tenths of a dBm. Differences are real dB.
