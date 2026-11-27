@@ -1,6 +1,19 @@
-# Open FPV Timer (OFT) — draft spec v0.10
+# Open FPV Timer (OFT) — draft spec v0.11
 
-**Status:** idea draft, 2026-11-22. Nothing here is built or final.
+**Status:** idea draft, 2026-11-27. Nothing here is built or final.
+
+**Changes from v0.10:**
+
+- **A UART Node needs only its two data wires and SYNC** (§5.1). The Timer restarts a Node
+  with `Reset`, and sends it to its ROM bootloader with `Dfu`, over the Node link. EN and
+  BOOT wires are optional, a fallback for a Node whose firmware no longer answers.
+- `/pins` (§6.3): `en` and `boot` may be `null` or left out, meaning not wired. They are
+  set together or not at all. The reference Timer's default is now not wired.
+- The reference C5 Node's default SYNC input moved from GPIO2 (a pad on the back of the
+  XIAO) to GPIO8 (header pin D8), so no build has to solder to the back of the module.
+- **Hello before Plan** (§5.1): a Timer sends a Node its `Plan` only after a `Hello` from
+  the Node's current run, and a Node repeats `Hello` until a `Plan` arrives.
+- `/status` may carry `crash` (§6.3 note below): the last run ended in a crash.
 
 **Changes from v0.9:**
 
@@ -350,11 +363,32 @@ Any receiver that speaks this link is a valid Node. Examples:
   VID `0x303A`. A udev rule (Linux) or the host shell spots new ports, reads `Hello`, and
   compares firmware versions. The Timer resets the C5 into its ROM bootloader over USB and
   flashes with `esptool`. No extra wires.
-- **UART Nodes:** ports are fixed by wiring. The Timer needs two extra GPIOs per Node, to
-  **EN** and the **BOOT** strap pin (check the C5 datasheet for the pin), to enter the ROM
-  bootloader, then runs `esptool --before no_reset`.
-- `Dfu` on the Node link (reboot into the ROM bootloader from firmware) is reserved, so a
-  UART Node could later be flashed without the BOOT wire.
+- **UART Nodes:** ports are fixed by wiring. No wire beyond the link is needed: the Timer
+  sends `Dfu` on the Node link, the Node restarts into its ROM bootloader (a Node says it can
+  in `Hello`, feature `DFU`), and the Timer writes the firmware over the same two wires. To
+  start the new firmware it clears the chip's "bootloader at next restart" request and lets
+  the chip's watchdog restart it. `Reset` restarts a Node into its firmware.
+- **Hello before Plan.** A Node sends `Hello` when it starts and repeats it (the reference
+  Node: with every `Status`) until a `Plan` arrives. A Timer sends a `Plan` only to a Node
+  that has said `Hello` since it last started (since its link came back from silence, or its
+  clock was seen to start again); a `Plan` sent on the strength of any other frame stops the
+  Hellos and leaves the Timer without the Node's id and abilities. A Node that is sending
+  but has not said `Hello` within a few seconds already holds a plan from before the Timer
+  started: the Timer sends it `Reset`.
+- **The ROM bootloader's rate.** An ESP32's ROM bootloader takes its UART rate from the
+  first traffic it hears. A Timer must call it (`SYNC`, at 115200) before sending anything
+  else, and raise the rate afterwards by command. One that has heard the Timer's ordinary
+  link traffic first settles near that rate, answers nothing at 115200, and looks dead;
+  it can be told, at the link's rate, to change to 115200. A Node's id in `Hello` must
+  differ from board to board (the reference Node: its 48-bit station MAC).
+- **After a crash** a Timer may report `crash` in `/status` (`count`, `text`, `safe_pins`:
+  this run ignores the saved Node pins) so that a fault at start-up can be seen and does
+  not keep the Timer off the network.
+- **EN and BOOT wires are optional.** One GPIO each, to **EN** and the **BOOT** strap pin
+  of every Node, lets the Timer force a Node into its bootloader when its firmware does not
+  answer (a failed update, a hang). Without them that case needs a hand on the Node: its
+  BOOT and RESET buttons, or its USB port. A Timer that has the wires tries the link first
+  and falls back to them.
 
 ## 6. OFT Protocol (Timer ↔ Adapter)
 
@@ -412,7 +446,7 @@ Adapters only need L1. All reference builds aim for L3.
 | GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, `pass_window_ms`, network settings |
 | GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
 | GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
-| GET / PUT | `/pins` | With `capabilities.pins`. For Timers whose Nodes are wired to GPIO pins. Body: the pin (GPIO number) for each signal, `{"nodes":[{"tx":4,"rx":5}],"sync":6,"en":7,"boot":8}`. `nodes` has one serial link per Node, first Node first, and its length is how many Nodes the Timer drives (1 to `capabilities.pins.max_nodes`); `tx` is the Timer's transmit (to the Node's RX). `sync`, `en` and `boot` are one wire each, shared by every Node. Stored at once, used from the next start; a body the hardware cannot do is refused with 400 and a reason. `GET` answers `{"saved":{...},"using":{...},"defaults":{...},"choices":{"nodes":[{"tx":[...],"rx":[...]}, ...],"out":[...]},"restart_needed":bool}`; `choices.nodes[k]` lists the pins the k-th link may use (links differ: some are hardware UARTs with fixed pins) and `choices.out` the pins allowed for `sync`, `en` and `boot`. Clients should keep this out of everyday view: it only changes when a board is wired differently |
+| GET / PUT | `/pins` | With `capabilities.pins`. For Timers whose Nodes are wired to GPIO pins. Body: the pin (GPIO number) for each signal, `{"nodes":[{"tx":4,"rx":5}],"sync":6,"en":7,"boot":8}`. `nodes` has one serial link per Node, first Node first, and its length is how many Nodes the Timer drives (1 to `capabilities.pins.max_nodes`); `tx` is the Timer's transmit (to the Node's RX). `sync` is one wire shared by every Node. `en` and `boot` are optional (§5.1): `null` or left out means not wired, and they are given together or not at all; where given they too are one wire each to every Node. Stored at once, used from the next start; a body the hardware cannot do is refused with 400 and a reason. `GET` answers `{"saved":{...},"using":{...},"defaults":{...},"choices":{"nodes":[{"tx":[...],"rx":[...]}, ...],"out":[...]},"restart_needed":bool}`; `choices.nodes[k]` lists the pins the k-th link may use (links differ: some are hardware UARTs with fixed pins) and `choices.out` the pins allowed for `sync`, and for `en` and `boot` where they are wired. Clients should keep this out of everyday view: it only changes when a board is wired differently |
 | GET / POST | `/control` | With `capabilities.control` (§6.6). `GET` lists the claims; `POST` hands control to one of them or frees it |
 | POST | `/restart` | Restart the Timer (202, then the connection drops) |
 | GET | `/status` | uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, clock-fit quality (residual µs), dropped samples, `nodes[]` (per Node: `slot`, `id`, `connected`, `temp_c`, `clock_synced`, `clock_source`, `clock_err_us`, `drift_ppm`, `link`; with several Nodes the top-level Node fields sum these up: the worst clock, the hottest, counts added, `node_connected` only if all are), clients, `config_rev` (a number that changes whenever `/config` or its saved state changes; it restarts with the Timer), `control` (the holder as `{"id", "name"}`, or `null`; §6.6) |
@@ -870,3 +904,8 @@ oft/
      regional bands and duty-cycle limits outside the US.
    - Cheapest first test: an off-the-shelf Ethernet-to-HaLow bridge on an unmodified
      Timer, both on a battery.
+17. **Nodes found without setup.** Idea, not built (2026-11-27): a Timer with wired Nodes
+   starts every link it has on a named pin layout (carrier-1, -2, -4) and reports which
+   ones answer, so nobody sets a Node count; `/pins` stays for boards wired differently.
+   Probing arbitrary pins for Nodes was considered and set aside: it drives pins without
+   knowing what is on them, and it hides a swapped pair instead of showing a silent Node.

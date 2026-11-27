@@ -91,9 +91,9 @@ Proposed pins on the RP2350 side (free of the W6300); confirm against the header
 | Ground | GND | GND | |
 | Node link TX → RX | UART1 TX **GP4** | UART RX (D7 = GPIO12) | 921600 baud 8N1 |
 | Node link RX ← TX | UART1 RX **GP5** | UART TX (D6 = GPIO11) | widscan58 already uses these XIAO pins for its host UART |
-| SYNC | **GP6** (output) | `OFT_SYNC_GPIO` in `oft-node-c5` (default GPIO2; confirm on the XIAO pinout) | 20 Hz pulse; the Node latches edge times in an ISR |
-| C5 reset | **GP7** | EN / RST pad | Lets the Timer reboot/flash the C5. First test: flash over USB-C from the laptop |
-| C5 boot | **GP8** | BOOT strap pin (GPIO28 on the C5 per Espressif's docs; confirm on the XIAO) | Same as above |
+| SYNC | **GP6** (output) | **D8** (GPIO8, the `oft-node-c5` default since 2026-11-27; it was GPIO2, the MTMS pad on the back) | 20 Hz pulse; the Node latches edge times in an ISR |
+| C5 reset (optional) | **GP7** | EN pad, on the back | Not needed: the Timer restarts and flashes the C5 over the two data wires. A fallback for a Node that stops answering; set the pin on the Timer's Advanced page |
+| C5 boot (optional) | **GP8** | BOOT pad, on the back | Same as above; EN and BOOT are fitted together |
 
 XIAO D6/D7 = C5 GPIO11/12 is confirmed by widscan58 (`CLAUDE.md`: UART0 TX GPIO11, RX GPIO12).
 
