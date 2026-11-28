@@ -379,7 +379,9 @@ Any receiver that speaks this link is a valid Node. Examples:
   first traffic it hears. A Timer must call it (`SYNC`, at 115200) before sending anything
   else, and raise the rate afterwards by command. One that has heard the Timer's ordinary
   link traffic first settles near that rate, answers nothing at 115200, and looks dead;
-  it can be told, at the link's rate, to change to 115200. A Node's id in `Hello` must
+  it can be called (`SYNC`) and then told, at the link's rate, to change to 115200. One
+  that was entered with its BOOT button starts its new firmware only after a hardware
+  reset: the software restart out of the bootloader does not read the strap again. A Node's id in `Hello` must
   differ from board to board (the reference Node: its 48-bit station MAC).
 - **After a crash** a Timer may report `crash` in `/status` (`count`, `text`, `safe_pins`:
   this run ignores the saved Node pins) so that a fault at start-up can be seen and does
