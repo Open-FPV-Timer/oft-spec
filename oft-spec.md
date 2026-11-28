@@ -859,7 +859,9 @@ Nodes and the Pi. Keep it as a fallback if the USB path proves awkward.
 
 ### 9.3 Shared details
 
-- **Antenna:** a stubby in a foil-lined cup, or a PCB patch, on the top bar looking down.
+- **Antenna:** the builds so far (B1) fit **none**: the C5's u.FL socket is empty and the board
+  is the pickup, so the board's position and facing are the aiming. Still untried: a stubby
+  in a foil-lined cup, or a PCB patch, on the top bar looking down.
   With several Nodes, one gate antenna into an N-way splitter keeps every seat on the same
   beam, and the splitter loss doubles as attenuation.
 - **Box:** 3D-printed, with a PVC clamp (21.3 / 26.7 mm OD).

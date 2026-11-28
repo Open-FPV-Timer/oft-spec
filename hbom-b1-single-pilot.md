@@ -15,12 +15,29 @@ Updated: 2026-11-08. Build B1 in [oft-spec.md](oft-spec.md) §9.
 
 | # | Part | Qty per timer | Notes |
 |---|---|---|---|
-| 3 | u.FL 5.8 GHz antenna | 1 | Plugs straight into the XIAO's u.FL, so no pigtail needed. Mount looking down from the top bar; a foil-lined cup narrows the beam |
+| 3 | u.FL 5.8 GHz antenna | 0 (as built) | **Not fitted.** The built Timers run with the XIAO's u.FL socket empty (see "As built" below). If one is tried later it plugs straight into the u.FL, so no pigtail is needed |
 | 4 | Jumper wires | ~5 | See wiring below |
 | 5 | Enclosure | 1 | Ryan designs and prints. PVC clamp (21.3 / 26.7 mm OD). Must clear the RJ45, PoE module, both USB-C ports, and the u.FL antenna |
 | 6 | Ethernet cable + PoE switch | shared | Already in use at RaceGOW. Confirm the kit's PoE module is 802.3af |
 
 ## Antenna and shielding test plan
+
+### As built: no antenna
+
+The built Timers have **no antenna on the C5**. The u.FL socket is left empty and the board
+itself is the pickup. This is what every flight test so far was recorded with, and it is the
+current reference setup. What follows from it:
+
+- **The C5 board is the antenna.** Where the XIAO sits and which way it faces sets what the
+  Node hears. There is no lead to move, so aiming a Node means moving or turning the board.
+- **Each Node hears for itself.** With several Nodes there is no shared antenna or splitter;
+  two Nodes on one Timer only hear the same thing if their boards are mounted alike.
+- **A way back to antennas:** an inline u.FL attenuator ("Only if needed", row 7) would let
+  a real antenna be fitted without clipping, which would make a Node aimable and repeatable.
+  Untried.
+- The test plan below was written before any hardware ran. Run A is the setup in use; the
+  other runs are still open.
+
 
 Goal: a **narrow, unclipped peak well above the noise floor** when a quad passes under the top
 bar. Use the C5 itself as the meter: stream its signal, carry a 25 mW VTX (analog, then
