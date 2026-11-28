@@ -5,11 +5,12 @@ Notes from 2026-11-08 on building better and cheaper FPV timer hardware for Grid
 - [research-notes-2026-11.md](research-notes-2026-11.md): what the RX5808 really does, gate
   link budget, antenna options, receivers (AD8318, RX5808 with coax, ESP32-C5 software
   radio, LapRF), Ethernet topologies, Grid adapter fit, step plan, sources.
-- [oft-spec.md](oft-spec.md): draft v0.5 of the Open FPV Timer (OFT, formerly OTN). One
-  Node firmware (C5), one Rust core library (`oft-core`), many Timer hosts: Grid in-process,
-  a Pico 2 + W5500 hub, or Linux `oftd` on a Raspberry Pi (first target). The Timer serves
-  the OFT Protocol (HTTP + WebSocket, capabilities, levels L1–L3). Includes RotorHazard and
-  LapRF prior art.
+- [oft-spec.md](oft-spec.md): the Open FPV Timer (OFT) draft spec. Two contracts: the OFT
+  Protocol, which race software uses to talk to a Timer (HTTP + WebSocket, capabilities,
+  levels L1–L3), and the Node link between a Timer and its Nodes. A Timer's own management
+  is not in it. Includes RotorHazard and LapRF prior art and the reference builds.
+- [distribution.md](distribution.md): the plan for getting firmware to people: releases,
+  one site for every part, and updating from a Timer's own page.
 - [hbom-b1-single-pilot.md](hbom-b1-single-pilot.md): parts bought and still needed for the
   first single-pilot gate timer (B1), plus wiring.
 
