@@ -1,6 +1,43 @@
-# Open FPV Timer (OFT) — draft spec v0.11
+# Open FPV Timer (OFT) — draft spec v0.12
 
-**Status:** idea draft, 2026-11-27. Nothing here is built or final.
+**Status:** draft, 2026-11-28. Running on two kinds of Timer; nothing here is final.
+
+## What this document is, and its versions
+
+Two contracts, each with the people it is written for:
+
+| Contract | For | Where | Wire version |
+|---|---|---|---|
+| **OFT Protocol** | race software (an adapter, a plugin) talking to a Timer | §6, with §4, §7 and §8 behind it | `proto` in `/info` and in the `/oft/v1` path; now `1` |
+| **Node link** | Node firmware talking to a Timer | §5 | `link_version` in a Node's `Hello`; now `1` |
+
+The number in the title (v0.12) is the version of this document: one draft, one list of
+changes. Software never sees it. Software checks the two wire versions, which move
+separately and only when something stops being compatible.
+
+**What is not here: a Timer's own management.** Setting its network address, choosing
+which pins its Nodes are on, updating its firmware or its Nodes', restarting it, reading
+what went wrong after a crash: these are done on the Timer itself, on its own page, and
+each kind of Timer does them its own way. Race software does not need them and must not
+depend on them. A Timer may serve such things under `/oft/v1` beside the protocol; they are
+described with that Timer (for the reference Timers: `oft-timer-rp2350/README.md` and
+`oft/README.md`), not here. Race software gets two things from that side, both in §6.3:
+`manage_url`, where the Timer's own page is, and `problems`, a short list of what is wrong.
+
+The test for whether something belongs in the OFT Protocol: every kind of Timer could
+offer it, and race software would act differently because of it.
+
+**Changes from v0.11:**
+
+- The document says what it is (above). Timer management moved out of the OFT Protocol:
+  `/network`, `/pins`, `/restart`, `/fw/*` and the `crash` object are no longer part of it,
+  and neither are the capabilities `network`, `pins` and `fw.update`. The reference Timers
+  still serve them, for their own page; they are described in each Timer's README.
+- `/info` gains `manage_url`: the Timer's own page.
+- `/status` gains `problems`: what is wrong with the Timer, in words race software can act
+  on (`node_missing`, `safe_mode`, `crashed`).
+- `/config/save` stays: making a seat layout the power-on one is something race software
+  setting up an event may want.
 
 **Changes from v0.10:**
 
@@ -383,9 +420,6 @@ Any receiver that speaks this link is a valid Node. Examples:
   that was entered with its BOOT button starts its new firmware only after a hardware
   reset: the software restart out of the bootloader does not read the strap again. A Node's id in `Hello` must
   differ from board to board (the reference Node: its 48-bit station MAC).
-- **After a crash** a Timer may report `crash` in `/status` (`count`, `text`, `safe_pins`:
-  this run ignores the saved Node pins) so that a fault at start-up can be seen and does
-  not keep the Timer off the network.
 - **EN and BOOT wires are optional.** One GPIO each, to **EN** and the **BOOT** strap pin
   of every Node, lets the Timer force a Node into its bootloader when its firmware does not
   answer (a failed update, a hang). Without them that case needs a hand on the Node: its
@@ -408,7 +442,7 @@ JSON is the mandatory encoding; other encodings may be offered in `encodings` la
   - The Timer re-announces when `seats` or `nodes` change, and sends a goodbye on a clean
     shutdown. TXT is a hint for listing Timers; `/info` is the source of truth.
   - `oftd` advertises by default; `--no-mdns` turns it off.
-- DHCP by default. A static IP can be set via `/config`.
+- DHCP by default. A fixed address, where a Timer offers one, is set on the Timer's own page.
 - Timers must support at least 2 simultaneous clients (4 recommended).
 
 ### 6.2 Capabilities
@@ -422,13 +456,15 @@ an `x-<vendor>-` prefix.
 | `crossings` | Timer detects crossings and emits `crossing` events; `/crossings?since=` works | `algorithms`, `replay` (crossings kept for catch-up), `fields` (optional crossing fields supported) |
 | `samples.stream` | Live signal over the WebSocket | `rate_hz` (max per seat), `decimate` (supported factors) |
 | `samples.history` | `/samples` returns past signal for a time window | `full_rate_s` (seconds kept at full rate), `reduced_rate_s`, `reduced_hz` |
-| `network` | `/network` sets the Timer's address | `static` (bool) |
-| `pins` | `/pins` sets which Timer pins the wired Nodes are on | `max_nodes` (how many Node links the Timer has) |
 | `config` | `/config` accepts writes | `persist` (`/config/save` works), `threshold_modes` (`auto`, `manual`), `min_lap_ms`, `seat_thresholds` (seats may carry their own `threshold`; absent on v0.3 Timers), `exit_hold_ms` (the field is accepted), `pass_window_ms` (the field is accepted) |
 | `time` | `/time` and clock info | `sync` (`ping`, `ptp`), `err_us` (current estimate) |
-| `fw.update` | Timer can update its Nodes (and optionally itself) | `nodes` (`usb`, `uart`), `self` (bool), `node_image` (optional: the kind of file `/fw/node` takes when it is not ESP32 firmware, e.g. `stm32f1`) |
 | `control` | One client at a time may write (§6.6): `control` messages on the stream, `/control` | none |
 | `direction` | Crossings include direction | reserved |
+
+Capabilities describe what race software can use. What a Timer's own page can do on that
+Timer (set an address, choose pins, update firmware) is not a capability; a Timer may list
+such things for its page elsewhere in `/info`, and clients ignore them, as they ignore any
+field they do not know.
 
 **Conformance levels** are bundles of capabilities:
 
@@ -444,19 +480,33 @@ Adapters only need L1. All reference builds aim for L3.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, fw, range_mhz, max_seats, level, link}]`; `level` is the unit of that Node's levels, §6.4), seats (`[{seat, node, rate_hz}]`), `calibrated` |
-| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, `pass_window_ms`, network settings |
+| GET | `/info` | Timer id, `boot_id`, host type, protocol version, level, `capabilities`, firmware versions (Timer and each Node), Nodes (`[{id, chip, fw, range_mhz, max_seats, level, link}]`; `level` is the unit of that Node's levels, §6.4), seats (`[{seat, node, rate_hz}]`), `calibrated`, `manage_url` (optional: the Timer's own page, see below) |
+| GET / PUT | `/config` | seats (`[{seat, freq_mhz, enabled, threshold?}]`), attenuation, `threshold` (mode and values; the default for every seat), `min_lap_ms`, `exit_hold_ms`, `pass_window_ms` |
 | GET / POST / DELETE | `/config/save` | With `capabilities.config.persist`. `PUT /config` alone lasts until the next restart. `POST` stores the config in use as the power-on config; `DELETE` forgets it (built-in defaults at the next start). All three answer `{"saved": bool, "current_is_saved": bool}` |
-| GET / PUT | `/network` | With `capabilities.network`. Body `{"mode":"dhcp"}` or `{"mode":"static","address":"192.168.1.50","prefix":24,"gateway":"192.168.1.1","dns":"..."}` (gateway and dns optional). Stored at once, used from the next start. `GET` answers `{"saved":{...},"using":"dhcp"|"static"|"dhcp (recovery jumper)","now":{"address","prefix","gateway"},"restart_needed":bool}`. A Timer with a fixed address needs a documented way back to DHCP without the network |
-| GET / PUT | `/pins` | With `capabilities.pins`. For Timers whose Nodes are wired to GPIO pins. Body: the pin (GPIO number) for each signal, `{"nodes":[{"tx":4,"rx":5}],"sync":6,"en":7,"boot":8}`. `nodes` has one serial link per Node, first Node first, and its length is how many Nodes the Timer drives (1 to `capabilities.pins.max_nodes`); `tx` is the Timer's transmit (to the Node's RX). `sync` is one wire shared by every Node. `en` and `boot` are optional (§5.1): `null` or left out means not wired, and they are given together or not at all; where given they too are one wire each to every Node. Stored at once, used from the next start; a body the hardware cannot do is refused with 400 and a reason. `GET` answers `{"saved":{...},"using":{...},"defaults":{...},"choices":{"nodes":[{"tx":[...],"rx":[...]}, ...],"out":[...]},"restart_needed":bool}`; `choices.nodes[k]` lists the pins the k-th link may use (links differ: some are hardware UARTs with fixed pins) and `choices.out` the pins allowed for `sync`, and for `en` and `boot` where they are wired. Clients should keep this out of everyday view: it only changes when a board is wired differently |
 | GET / POST | `/control` | With `capabilities.control` (§6.6). `GET` lists the claims; `POST` hands control to one of them or frees it |
-| POST | `/restart` | Restart the Timer (202, then the connection drops) |
-| GET | `/status` | uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, clock-fit quality (residual µs), dropped samples, `nodes[]` (per Node: `slot`, `id`, `connected`, `temp_c`, `clock_synced`, `clock_source`, `clock_err_us`, `drift_ppm`, `link`; with several Nodes the top-level Node fields sum these up: the worst clock, the hottest, counts added, `node_connected` only if all are), clients, `config_rev` (a number that changes whenever `/config` or its saved state changes; it restarts with the Timer), `control` (the holder as `{"id", "name"}`, or `null`; §6.6) |
+| GET | `/status` | `problems` (see below), uptime, temperature (`temp_c` Node, `timer_temp_c` Timer), link, clock-fit quality (residual µs), dropped samples, `nodes[]` (per Node: `slot`, `id`, `connected`, `temp_c`, `clock_synced`, `clock_source`, `clock_err_us`, `drift_ppm`, `link`; with several Nodes the top-level Node fields sum these up: the worst clock, the hottest, counts added, `node_connected` only if all are), clients, `config_rev` (a number that changes whenever `/config` or its saved state changes; it restarts with the Timer), `control` (the holder as `{"id", "name"}`, or `null`; §6.6) |
 | GET | `/time` | timer clock now, in µs |
 | GET | `/crossings?since=<seq>` | crossings after `seq`, for catching up after a reconnect |
 | GET | `/samples?seat=&from=&to=` | signal history, for re-deriving a missed lap |
-| POST | `/fw/nodes` | start a Node update (body: which Nodes, or `all`); progress in `/status` |
 | GET | `/stream` | WebSocket upgrade for live data |
+
+**The Timer's own page: `manage_url`.** Everything about a Timer that is not about timing
+a race is done on the Timer's own page: its address, its wiring, its firmware. `/info` may
+carry `manage_url`, the address of that page, absolute or relative to the address the
+client reached the Timer at (the reference Timers: `"/"`). Race software that wants to
+offer those things shows a link to it. Absent: the Timer has no such page.
+
+**What is wrong: `problems`.** `/status` carries `problems`, an array of short names, empty
+when the Timer knows of nothing wrong. Race software should show them, and may refuse to
+start a race on some. A client shows a name it does not know as it stands.
+
+| Name | Meaning |
+|---|---|
+| `node_missing` | A Node the Timer is set up for is not answering. Its seats have moved to the others, or are not being watched |
+| `safe_mode` | The Timer failed while starting and is running on reduced settings, typically fewer Nodes than it is set up for. Its own page says how to leave it |
+| `crashed` | The Timer's last run ended in a failure. Timing is running again; the details are on its own page |
+
+A Timer from before v0.12 sends no `problems`; that is not the same as an empty list.
 
 **`/config` thresholds.** The top-level `threshold` applies to every seat that does not
 carry its own. A seat's optional `threshold` has the same shape and overrides it for that
